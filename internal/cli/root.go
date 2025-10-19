@@ -13,10 +13,11 @@ var rootCmd = &cobra.Command{
 	Long: `imgcd is a CLI tool that allows you to export and import container images
 with support for incremental/differential exports. It helps reduce the size
 of image transfers in offline environments by only exporting changed layers.`,
-	Version: Version,
 }
 
 func Execute() error {
+	// Set version dynamically before execution
+	rootCmd.Version = Version
 	return rootCmd.Execute()
 }
 

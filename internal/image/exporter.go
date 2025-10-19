@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/yangliu35/imgcd/internal/runtime"
+	"github.com/so2liu/imgcd/internal/runtime"
 )
 
 // Exporter exports container images to tar.gz archives

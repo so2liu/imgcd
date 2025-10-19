@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/yangliu35/imgcd/internal/image"
+	"github.com/so2liu/imgcd/internal/image"
 )
 
 var fromFile string

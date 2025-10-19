@@ -9,7 +9,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/yangliu35/imgcd/internal/runtime"
+	"github.com/so2liu/imgcd/internal/runtime"
 )
 
 // Importer imports container images from tar.gz archives

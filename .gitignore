@@ -1,6 +1,6 @@
-# Binaries
-imgcd
-imgcd-*
+# Binaries (only in root directory)
+/imgcd
+/imgcd-*
 *.exe
 *.dll
 *.so

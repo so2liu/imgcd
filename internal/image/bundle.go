@@ -179,9 +179,9 @@ func (bg *BundleGenerator) downloadBinary(platform, outputPath string) error {
 	arch := parts[1]
 
 	// Construct download URL
-	// Format: https://github.com/yangliu35/imgcd/releases/download/v1.0.0/imgcd-linux-amd64.tar.gz
+	// Format: https://github.com/so2liu/imgcd/releases/download/v1.0.0/imgcd-linux-amd64.tar.gz
 	filename := fmt.Sprintf("imgcd-%s-%s.tar.gz", osName, arch)
-	url := fmt.Sprintf("https://github.com/yangliu35/imgcd/releases/download/v%s/%s", bg.version, filename)
+	url := fmt.Sprintf("https://github.com/so2liu/imgcd/releases/download/v%s/%s", bg.version, filename)
 
 	// Create temporary directory for download
 	tempDir, err := os.MkdirTemp("", "imgcd-download-*")

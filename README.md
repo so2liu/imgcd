@@ -16,11 +16,11 @@ A lightweight CLI tool for exporting and importing container images with support
 
 ### Pre-built Binary (Recommended)
 
-Download the latest release for your platform from the [releases page](https://github.com/yangliu35/imgcd/releases).
+Download the latest release for your platform from the [releases page](https://github.com/so2liu/imgcd/releases).
 
 **Linux (amd64):**
 ```bash
-wget https://github.com/yangliu35/imgcd/releases/latest/download/imgcd-linux-amd64.tar.gz
+wget https://github.com/so2liu/imgcd/releases/latest/download/imgcd-linux-amd64.tar.gz
 tar -xzf imgcd-linux-amd64.tar.gz
 sudo mv imgcd-linux-amd64 /usr/local/bin/imgcd
 chmod +x /usr/local/bin/imgcd
@@ -28,7 +28,7 @@ chmod +x /usr/local/bin/imgcd
 
 **Linux (arm64):**
 ```bash
-wget https://github.com/yangliu35/imgcd/releases/latest/download/imgcd-linux-arm64.tar.gz
+wget https://github.com/so2liu/imgcd/releases/latest/download/imgcd-linux-arm64.tar.gz
 tar -xzf imgcd-linux-arm64.tar.gz
 sudo mv imgcd-linux-arm64 /usr/local/bin/imgcd
 chmod +x /usr/local/bin/imgcd
@@ -36,7 +36,7 @@ chmod +x /usr/local/bin/imgcd
 
 **macOS (Intel):**
 ```bash
-curl -L https://github.com/yangliu35/imgcd/releases/latest/download/imgcd-darwin-amd64.tar.gz -o imgcd-darwin-amd64.tar.gz
+curl -L https://github.com/so2liu/imgcd/releases/latest/download/imgcd-darwin-amd64.tar.gz -o imgcd-darwin-amd64.tar.gz
 tar -xzf imgcd-darwin-amd64.tar.gz
 sudo mv imgcd-darwin-amd64 /usr/local/bin/imgcd
 chmod +x /usr/local/bin/imgcd
@@ -44,7 +44,7 @@ chmod +x /usr/local/bin/imgcd
 
 **macOS (Apple Silicon):**
 ```bash
-curl -L https://github.com/yangliu35/imgcd/releases/latest/download/imgcd-darwin-arm64.tar.gz -o imgcd-darwin-arm64.tar.gz
+curl -L https://github.com/so2liu/imgcd/releases/latest/download/imgcd-darwin-arm64.tar.gz -o imgcd-darwin-arm64.tar.gz
 tar -xzf imgcd-darwin-arm64.tar.gz
 sudo mv imgcd-darwin-arm64 /usr/local/bin/imgcd
 chmod +x /usr/local/bin/imgcd
@@ -55,7 +55,7 @@ chmod +x /usr/local/bin/imgcd
 Requires Go 1.22 or later:
 
 ```bash
-git clone https://github.com/yangliu35/imgcd.git
+git clone https://github.com/so2liu/imgcd.git
 cd imgcd
 go build -o imgcd ./cmd/imgcd
 sudo mv imgcd /usr/local/bin/

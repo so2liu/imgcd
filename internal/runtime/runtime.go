@@ -13,6 +13,10 @@ type Runtime interface {
 	// GetImage retrieves image information
 	GetImage(ctx context.Context, ref string) (*ImageInfo, error)
 
+	// GetImageWithPlatform retrieves image information for a specific platform
+	// If the image doesn't exist locally, it will be pulled for the specified platform
+	GetImageWithPlatform(ctx context.Context, ref, platform string) (*ImageInfo, error)
+
 	// SaveImage saves an image to a file
 	SaveImage(ctx context.Context, ref, outputPath string) error
 

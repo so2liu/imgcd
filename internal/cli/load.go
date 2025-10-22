@@ -3,8 +3,8 @@ package cli
 import (
 	"fmt"
 
-	"github.com/spf13/cobra"
 	"github.com/so2liu/imgcd/internal/image"
+	"github.com/spf13/cobra"
 )
 
 var fromFile string

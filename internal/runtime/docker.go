@@ -34,7 +34,27 @@ func (d *DockerRuntime) GetImage(ctx context.Context, ref string) (*ImageInfo, e
 
 	// If image not found, try to pull it
 	fmt.Printf("Image %s not found locally, pulling...\n", ref)
-	if err := d.pullImage(ctx, ref); err != nil {
+	if err := d.pullImage(ctx, ref, ""); err != nil {
+		return nil, fmt.Errorf("failed to pull image: %w", err)
+	}
+
+	// Try to inspect again after pulling
+	return d.inspectImage(ctx, ref)
+}
+
+func (d *DockerRuntime) GetImageWithPlatform(ctx context.Context, ref, platform string) (*ImageInfo, error) {
+	// Try to inspect the image
+	info, err := d.inspectImage(ctx, ref)
+	if err == nil {
+		// Image exists locally, check if it's the right platform
+		// For now, we'll assume it's the right platform if it exists
+		// TODO: Add platform verification
+		return info, nil
+	}
+
+	// If image not found, try to pull it with platform specification
+	fmt.Printf("Image %s not found locally, pulling for platform %s...\n", ref, platform)
+	if err := d.pullImage(ctx, ref, platform); err != nil {
 		return nil, fmt.Errorf("failed to pull image: %w", err)
 	}
 
@@ -80,8 +100,14 @@ func (d *DockerRuntime) inspectImage(ctx context.Context, ref string) (*ImageInf
 	}, nil
 }
 
-func (d *DockerRuntime) pullImage(ctx context.Context, ref string) error {
-	cmd := exec.CommandContext(ctx, "docker", "pull", ref)
+func (d *DockerRuntime) pullImage(ctx context.Context, ref, platform string) error {
+	args := []string{"pull"}
+	if platform != "" {
+		args = append(args, "--platform", platform)
+	}
+	args = append(args, ref)
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

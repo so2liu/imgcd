@@ -4,11 +4,12 @@ A lightweight CLI tool for exporting and importing container images with support
 
 ## Features
 
+- **Self-Extracting Bundles**: Creates standalone `.sh` files that include the imgcd binary - no installation needed on target systems!
 - **Incremental Export**: Only export layers that differ from a base image, reducing transfer size
 - **Simple CLI**: Just two commands - `save` and `load`
 - **Auto-detection**: Automatically detects and uses Docker or containerd
 - **Auto-pull**: Automatically pulls images from registry if not found locally
-- **Portable Archives**: Output is a single `.tar.gz` file with embedded metadata
+- **Target Platform Selection**: Choose the target platform (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64)
 - **Cross-platform**: Supports macOS and Linux
 
 ## Installation
@@ -64,64 +65,87 @@ sudo mv imgcd /usr/local/bin/
 
 ### Export an Image
 
-**Full export:**
+`imgcd save` creates a **self-extracting bundle** - a standalone shell script that contains both the imgcd binary and your image data. This means the target system doesn't need imgcd installed!
+
+**Simplest form:**
 ```bash
-# Export entire image
+# Export alpine (defaults to linux/amd64)
+imgcd save alpine
+# Output: ./out/alpine-latest__since-none.sh
+```
+
+**Full export with tag:**
+```bash
+# Export entire image as self-extracting bundle
 imgcd save ns/app:1.0.0
-# Output: ./out/ns_app-1.0.0__since-none.tar.gz
+# Output: ./out/ns_app-1.0.0__since-none.sh
 ```
 
 **Incremental export:**
 
-> 💡 **Tip**: The `--since` flag accepts either a full image reference or just a tag. When using just a tag, it automatically uses the same repository as the target image.
+> **Tip**: The `--since` flag accepts either a full image reference or just a tag. When using just a tag, it automatically uses the same repository as the target image.
 
 ```bash
-# Full reference format
-imgcd save ns/app:1.2.9 --since ns/app:1.2.8
-# Output: ./out/ns_app-1.2.9__since-1.2.8.tar.gz
-
-# Short tag format (recommended for same repository)
+# Incremental export with short tag format (recommended)
 imgcd save alpine:3.20 --since 3.19
+# Output: ./out/alpine-3.20__since-3.19.sh
+
 imgcd save myrepo/app:2.0.0 --since 1.9.0
-# Output: ./out/alpine-3.20__since-3.19.tar.gz
+# Output: ./out/myrepo_app-2.0.0__since-1.9.0.sh
 ```
+
+**Specify target platform:**
+```bash
+# For Linux ARM64
+imgcd save myapp:v2.0 --target-platform linux/arm64
+imgcd save myapp:v2.0 -t linux/arm64
+
+# For macOS Apple Silicon
+imgcd save myapp:v2.0 -t darwin/arm64
+```
+
+> **Important**: imgcd automatically pulls images for the target platform. For example, running `imgcd save alpine -t linux/amd64` on macOS ARM64 will pull the linux/amd64 version of alpine, ensuring the exported bundle works correctly on the target system.
 
 **Real-world example:**
 ```bash
-# Full export: 103MB
+# Full export: creates a self-extracting bundle
 imgcd save myapp:v2.0
 
-# Incremental export: 82MB (20% smaller!)
+# Incremental export: 20% smaller!
 imgcd save myapp:v2.0 --since v1.9
 # Output shows: Filtered 8/13 layers (saved 23.9 MB)
 ```
 
 **Custom output directory:**
 ```bash
-imgcd save ns/app:2.0.0 --since ns/app:1.9.0 --out-dir /tmp/bundles
-# Output: /tmp/bundles/ns_app-2.0.0__since-1.9.0.tar.gz
+imgcd save ns/app:2.0.0 --out-dir /tmp/bundles
+# Output: /tmp/bundles/ns_app-2.0.0__since-none.sh
 ```
 
 ### Import an Image
 
+**On the target system (no imgcd installation needed!):**
 ```bash
-# Import from tar.gz (image name/tag auto-detected)
-imgcd load --from ./out/ns_app-1.2.9__since-1.2.8.tar.gz
+# Just run the self-extracting bundle
+chmod +x ./alpine-latest__since-none.sh
+./alpine-latest__since-none.sh
 ```
 
 ## How It Works
 
 1. **Save**:
    - Detects available container runtime (Docker or containerd)
-   - Automatically pulls images if not found locally
+   - Automatically pulls images for the target platform
    - Exports the image using `docker save` or `ctr export`
    - **Compares with base image and filters out shared layers** (true incremental export!)
-   - Creates a `.tar.gz` archive with metadata and only new layers
+   - Downloads the imgcd binary for the target platform (cached in `~/.imgcd/bin/`)
+   - Creates a self-extracting shell script (`.sh`) with embedded binary and image data
 
-2. **Load**:
-   - Extracts metadata and image from the archive
-   - Imports using `docker load` or `ctr import`
-   - Skips layers that already exist in the runtime
+2. **Load** (run the bundle on target):
+   - Detects current platform and validates compatibility
+   - Extracts embedded imgcd binary and image data to temporary directory
+   - Runs the import automatically
+   - Cleans up temporary files
 
 ### Auto-Pull Feature
 
@@ -146,9 +170,15 @@ imgcd save myapp:2.0 --since myapp:1.0
 
 ## Requirements
 
+**On the exporting system (where you run `imgcd save`):**
 - Docker or containerd must be installed and running
 - For Docker: `docker` CLI must be available
 - For containerd: `ctr` CLI must be available
+- Internet access (to download imgcd binaries for target platforms, cached after first use)
+
+**On the target system (where you import):**
+- Docker or containerd must be installed and running
+- **No imgcd installation needed** when using self-extracting bundles!
 
 ## Architecture
 
@@ -170,6 +200,8 @@ imgcd/
 - [x] **True incremental layer filtering** - saves 20-50% size on incremental exports!
 - [x] Auto-pull missing images
 - [x] Short tag format for --since flag
+- [x] **Self-extracting bundles** - no installation needed on target systems!
+- [x] Target platform selection
 - [ ] Progress indicators
 - [ ] Compression level options
 - [ ] Support for additional runtimes (podman, etc.)

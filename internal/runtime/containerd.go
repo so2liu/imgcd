@@ -41,7 +41,25 @@ func (c *ContainerdRuntime) GetImage(ctx context.Context, ref string) (*ImageInf
 
 	// If image not found, try to pull it
 	fmt.Printf("Image %s not found locally, pulling...\n", ref)
-	if err := c.pullImage(ctx, ref); err != nil {
+	if err := c.pullImage(ctx, ref, ""); err != nil {
+		return nil, fmt.Errorf("failed to pull image: %w", err)
+	}
+
+	// Try to check again after pulling
+	return c.checkImage(ctx, ref)
+}
+
+func (c *ContainerdRuntime) GetImageWithPlatform(ctx context.Context, ref, platform string) (*ImageInfo, error) {
+	// Try to check if image exists
+	info, err := c.checkImage(ctx, ref)
+	if err == nil {
+		// Image exists locally
+		return info, nil
+	}
+
+	// If image not found, try to pull it with platform specification
+	fmt.Printf("Image %s not found locally, pulling for platform %s...\n", ref, platform)
+	if err := c.pullImage(ctx, ref, platform); err != nil {
 		return nil, fmt.Errorf("failed to pull image: %w", err)
 	}
 
@@ -70,8 +88,14 @@ func (c *ContainerdRuntime) checkImage(ctx context.Context, ref string) (*ImageI
 	}, nil
 }
 
-func (c *ContainerdRuntime) pullImage(ctx context.Context, ref string) error {
-	cmd := exec.CommandContext(ctx, c.ctrPath, "image", "pull", ref)
+func (c *ContainerdRuntime) pullImage(ctx context.Context, ref, platform string) error {
+	args := []string{"image", "pull"}
+	if platform != "" {
+		args = append(args, "--platform", platform)
+	}
+	args = append(args, ref)
+
+	cmd := exec.CommandContext(ctx, c.ctrPath, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

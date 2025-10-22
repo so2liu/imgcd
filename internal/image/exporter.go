@@ -14,28 +14,39 @@ import (
 	"github.com/so2liu/imgcd/internal/runtime"
 )
 
-// Exporter exports container images to tar.gz archives
+// Exporter exports container images to tar.gz archives or self-extracting bundles
 type Exporter struct {
 	runtime runtime.Runtime
+	version string
 }
 
 // NewExporter creates a new image exporter
-func NewExporter() (*Exporter, error) {
+func NewExporter(version string) (*Exporter, error) {
 	rt, err := runtime.DetectRuntime()
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect runtime: %w", err)
 	}
 
-	return &Exporter{runtime: rt}, nil
+	return &Exporter{runtime: rt, version: version}, nil
 }
 
-// Export exports an image to a tar.gz file
-func (e *Exporter) Export(ctx context.Context, newRef, sinceRef, outDir string) (string, error) {
+// ExportOptions contains options for exporting images
+type ExportOptions struct {
+	TargetPlatform string
+}
+
+// Export exports an image to a self-extracting bundle
+func (e *Exporter) Export(ctx context.Context, newRef, sinceRef, outDir string, opts ExportOptions) (string, error) {
 	fmt.Printf("Using runtime: %s\n", e.runtime.Name())
+
+	// For self-extracting bundles, pull for the target platform
+	pullPlatform := opts.TargetPlatform
+	fmt.Printf("Target platform: %s (will pull images for this platform)\n", pullPlatform)
 
 	// Check and pull the new image if necessary
 	fmt.Printf("Checking image %s...\n", newRef)
-	if _, err := e.runtime.GetImage(ctx, newRef); err != nil {
+	_, err := e.runtime.GetImageWithPlatform(ctx, newRef, pullPlatform)
+	if err != nil {
 		return "", fmt.Errorf("failed to get image %s: %w", newRef, err)
 	}
 
@@ -46,7 +57,7 @@ func (e *Exporter) Export(ctx context.Context, newRef, sinceRef, outDir string) 
 		fullSinceRef := normalizeSinceRef(newRef, sinceRef)
 		fmt.Printf("Calculating diff with: %s\n", fullSinceRef)
 
-		oldImage, err := e.runtime.GetImage(ctx, fullSinceRef)
+		oldImage, err := e.runtime.GetImageWithPlatform(ctx, fullSinceRef, pullPlatform)
 		if err != nil {
 			return "", fmt.Errorf("failed to get base image %s: %w", fullSinceRef, err)
 		}
@@ -75,21 +86,41 @@ func (e *Exporter) Export(ctx context.Context, newRef, sinceRef, outDir string) 
 
 	// Create output file
 	repo, tag := parseReference(newRef)
-	outputPath := generateFilename(repo, tag, sinceRef, outDir)
 
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create output directory: %w", err)
 	}
 
-	// If no incremental export, just compress the tar
+	// First create the tar.gz (either full or incremental)
+	var tarGzPath string
+
 	if oldLayers == nil {
 		fmt.Printf("Creating full export...\n")
-		return e.compressImage(tempFile.Name(), outputPath, newRef, sinceRef)
+		tarGzPath = generateFilename(repo, tag, sinceRef, outDir, true)
+		tarGzPath, err = e.compressImage(tempFile.Name(), tarGzPath, newRef, sinceRef)
+	} else {
+		fmt.Printf("Creating incremental export...\n")
+		tarGzPath = generateFilename(repo, tag, sinceRef, outDir, true)
+		tarGzPath, err = e.createIncrementalExport(tempFile.Name(), tarGzPath, newRef, sinceRef, oldLayers)
 	}
 
-	// Otherwise, filter layers and create incremental export
-	fmt.Printf("Creating incremental export...\n")
-	return e.createIncrementalExport(tempFile.Name(), outputPath, newRef, sinceRef, oldLayers)
+	if err != nil {
+		return "", err
+	}
+
+	// Create self-extracting bundle
+	fmt.Printf("Creating self-extracting bundle for %s...\n", opts.TargetPlatform)
+	bundlePath := generateFilename(repo, tag, sinceRef, outDir, false)
+
+	bundleGen := NewBundleGenerator(e.version)
+	if err := bundleGen.GenerateBundle(tarGzPath, bundlePath, opts.TargetPlatform, newRef); err != nil {
+		return "", fmt.Errorf("failed to create bundle: %w", err)
+	}
+
+	// Remove the intermediate tar.gz file
+	os.Remove(tarGzPath)
+
+	return bundlePath, nil
 }
 
 func (e *Exporter) compressImage(inputPath, outputPath, newRef, sinceRef string) (string, error) {
@@ -177,7 +208,7 @@ func normalizeSinceRef(newRef, sinceRef string) string {
 	return fmt.Sprintf("%s:%s", repo, sinceRef)
 }
 
-func generateFilename(repo, tag, sinceRef, outDir string) string {
+func generateFilename(repo, tag, sinceRef, outDir string, isTarGz bool) string {
 	// Clean repository name (replace / and : with _)
 	cleanRepo := strings.ReplaceAll(repo, "/", "_")
 	cleanRepo = strings.ReplaceAll(cleanRepo, ":", "_")
@@ -188,7 +219,13 @@ func generateFilename(repo, tag, sinceRef, outDir string) string {
 		_, sinceTag = parseReference(sinceRef)
 	}
 
-	filename := fmt.Sprintf("%s-%s__since-%s.tar.gz", cleanRepo, tag, sinceTag)
+	// Choose extension based on format
+	ext := ".sh"
+	if isTarGz {
+		ext = ".tar.gz"
+	}
+
+	filename := fmt.Sprintf("%s-%s__since-%s%s", cleanRepo, tag, sinceTag, ext)
 	return filepath.Join(outDir, filename)
 }
 

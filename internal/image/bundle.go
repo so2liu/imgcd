@@ -104,44 +104,25 @@ func (bg *BundleGenerator) useCurrentBinary(platform string) (string, error) {
 		if _, err := os.Stat(customPath); err != nil {
 			return "", fmt.Errorf("custom binary not found at %s: %w", customPath, err)
 		}
-		fmt.Printf("Development mode: using custom binary for %s from IMGCD_BINARY_PATH\n", platform)
+		fmt.Printf("Development mode: using custom binary from IMGCD_BINARY_PATH\n")
 		return customPath, nil
 	}
 
-	// Detect current platform
-	currentPlatform := detectCurrentPlatform()
-
-	// Check if platforms match
-	if currentPlatform != platform {
-		return "", fmt.Errorf(`Development mode: cannot create bundle for %s on %s
-
-The embedded binary must match the target platform (%s), but the current
-binary is for %s. In dev mode, imgcd cannot download binaries from GitHub.
-
-Solutions:
-  1. Cross-compile for the target platform and use IMGCD_BINARY_PATH:
-     GOOS=%s GOARCH=%s go build -o imgcd-%s ./cmd/imgcd
-     IMGCD_BINARY_PATH=./imgcd-%s ./imgcd save alpine
-
-  2. Change target platform to match current platform:
-     ./imgcd save alpine -t %s
-
-  3. Build and test on the target platform directly
-     (recommended for production use)`,
-			platform, currentPlatform,
-			platform, currentPlatform,
-			getPlatformOS(platform), getPlatformArch(platform), platform,
-			platform,
-			currentPlatform)
-	}
-
-	// Find the current binary
+	// In dev mode, use current binary regardless of platform
+	// This is for development convenience - the bundle may not work on different platforms
 	execPath, err := os.Executable()
 	if err != nil {
 		return "", fmt.Errorf("failed to get executable path: %w", err)
 	}
 
-	fmt.Printf("Development mode: using current platform binary (%s)\n", currentPlatform)
+	currentPlatform := detectCurrentPlatform()
+	if currentPlatform != platform {
+		fmt.Printf("Development mode: using current binary (%s) for target platform (%s)\n", currentPlatform, platform)
+		fmt.Printf("Warning: This bundle will only work on %s systems\n", currentPlatform)
+	} else {
+		fmt.Printf("Development mode: using current platform binary (%s)\n", currentPlatform)
+	}
+
 	return execPath, nil
 }
 

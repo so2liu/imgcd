@@ -42,9 +42,17 @@ imgcd is a CLI tool for incremental container image export/import, designed for 
 
 **CLI (internal/cli/)**
 
--   Cobra-based command structure: save, load, update
+-   Cobra-based command structure: save, load, diff, update
 -   `save`: Export image with optional --since for incremental exports
+-   `diff`: Compare images using metadata only (no layer downloads), useful for estimating incremental export sizes
 -   Version injection: Version variable set by main.go at runtime from git tag
+
+**Remote/Diff (internal/remote/, internal/diff/)**
+
+-   `Fetcher`: Downloads image metadata (manifests, configs) from registries without pulling layers
+-   `Differ`: Compares layer DiffIDs between images to show what would be included in incremental export
+-   Supports JSON and text output formats with optional verbose mode
+-   Platform-aware: fetches metadata for specified target platform
 
 ### Key Design Patterns
 
@@ -87,6 +95,24 @@ Output files follow pattern: `{repo}_{tag}__since-{base_tag}.sh`
 -   Repository slashes and colons replaced with underscores
 -   Example: `alpine-3.20__since-3.19.sh`
 -   Example: `myrepo_app-2.0.0__since-1.9.0.sh`
+
+## Diff Command
+
+The `diff` command compares two images by fetching only metadata (manifests and configs) without downloading layer data. This is useful for quickly estimating incremental export sizes before performing actual exports.
+
+```bash
+# Compare alpine versions (short tag format)
+imgcd diff alpine:3.20 --since 3.19
+
+# Verbose output with layer details
+imgcd diff alpine:3.20 --since 3.19 --verbose
+
+# JSON output for scripting
+imgcd diff alpine:3.20 --since 3.19 --output json
+
+# Specify target platform
+imgcd diff myapp:2.0 --since 1.9 -t linux/arm64
+```
 
 ## Testing Incremental Export Locally
 

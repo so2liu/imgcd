@@ -2,7 +2,6 @@ package image
 
 import (
 	"archive/tar"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/klauspost/pgzip"
 	"github.com/so2liu/imgcd/internal/cache"
 )
 
@@ -238,7 +238,7 @@ func (re *RemoteExporter) ExportFromRegistry(ctx context.Context, newRef, sinceR
 	tarGzPath := generateFilename(repo, tag, sinceRef, outDir, true)
 
 	// Create the tar.gz with image data
-	if err := re.createRemoteTar(tarGzPath, newRef, sinceRef, configFile, layersToExport); err != nil {
+	if err := re.createRemoteTar(ctx, tarGzPath, newRef, sinceRef, configFile, layersToExport); err != nil {
 		return "", fmt.Errorf("failed to create tar: %w", err)
 	}
 
@@ -278,7 +278,7 @@ func (re *RemoteExporter) fetchImage(ctx context.Context, imageRef string, platf
 }
 
 // createRemoteTar creates a tar.gz containing the Docker image format
-func (re *RemoteExporter) createRemoteTar(outputPath, newRef, sinceRef string, config *v1.ConfigFile, layers []v1.Layer) error {
+func (re *RemoteExporter) createRemoteTar(ctx context.Context, outputPath, newRef, sinceRef string, config *v1.ConfigFile, layers []v1.Layer) error {
 	// Create output file
 	outFile, err := os.Create(outputPath)
 	if err != nil {
@@ -286,8 +286,8 @@ func (re *RemoteExporter) createRemoteTar(outputPath, newRef, sinceRef string, c
 	}
 	defer outFile.Close()
 
-	// Create gzip writer
-	gzw := gzip.NewWriter(outFile)
+	// Create pgzip writer for parallel compression
+	gzw := pgzip.NewWriter(outFile)
 	defer gzw.Close()
 
 	// Create tar writer
@@ -318,7 +318,7 @@ func (re *RemoteExporter) createRemoteTar(outputPath, newRef, sinceRef string, c
 	}
 
 	// Create Docker image tar
-	imageTar, err := re.createDockerImageTarFromRemote(config, layers, newRef)
+	imageTar, err := re.createDockerImageTarFromRemote(ctx, config, layers, newRef)
 	if err != nil {
 		return fmt.Errorf("failed to create image tar: %w", err)
 	}
@@ -352,7 +352,7 @@ func (re *RemoteExporter) createRemoteTar(outputPath, newRef, sinceRef string, c
 }
 
 // createDockerImageTarFromRemote creates a Docker format tar from remote layers
-func (re *RemoteExporter) createDockerImageTarFromRemote(config *v1.ConfigFile, layers []v1.Layer, imageRef string) (string, error) {
+func (re *RemoteExporter) createDockerImageTarFromRemote(ctx context.Context, config *v1.ConfigFile, layers []v1.Layer, imageRef string) (string, error) {
 	// Create temp file for the docker image tar
 	tempFile, err := os.CreateTemp("", "imgcd-remote-*.tar")
 	if err != nil {
@@ -387,133 +387,41 @@ func (re *RemoteExporter) createDockerImageTarFromRemote(config *v1.ConfigFile, 
 		return "", err
 	}
 
-	// Write layers
+	// Process layers in parallel
+	processor := NewLayerProcessor(re.layerCache, imageRef, len(layers))
+	preparedChan := processor.ProcessLayers(ctx, layers)
+
+	// Write layers to tar in order
 	writtenLayerPaths := []string{}
-	totalLayers := len(layers)
-	for idx, layer := range layers {
-		digest, _ := layer.Digest()
-		diffID, _ := layer.DiffID()
-		layerDir := strings.TrimPrefix(digest.String(), "sha256:")[:12]
+	for i := 0; i < len(layers); i++ {
+		prepared := <-preparedChan
+
+		// Check for errors
+		if prepared.Err != nil {
+			return "", fmt.Errorf("failed to prepare layer %d: %w", prepared.Index, prepared.Err)
+		}
+
+		// Generate layer path
+		layerDir := strings.TrimPrefix(prepared.Digest, "sha256:")[:12]
 		layerPath := layerDir + "/layer.tar"
 		writtenLayerPaths = append(writtenLayerPaths, layerPath)
 
-		// Get layer size
-		size, err := layer.Size()
-		if err != nil {
-			return "", fmt.Errorf("failed to get layer size: %w", err)
-		}
-
-		// Create a temp file for the layer
-		layerTemp, err := os.CreateTemp("", "layer-*.tar")
-		if err != nil {
-			return "", err
-		}
-
-		// Check cache first
-		if re.layerCache.Exists(diffID.String()) {
-			fmt.Fprintf(os.Stderr, "%s: Using cached layer\n", layerDir)
-
-			cachedReader, err := re.layerCache.Get(diffID.String())
-			if err == nil {
-				// Copy from cache
-				fmt.Fprintf(os.Stderr, "%s: Reading from cache... ", layerDir)
-				_, err = io.Copy(layerTemp, cachedReader)
-				cachedReader.Close()
-				layerTemp.Close()
-
-				if err == nil {
-					fmt.Fprintf(os.Stderr, "done\n")
-					// Successfully used cache
-					goto addToTar
-				}
-				fmt.Fprintf(os.Stderr, "failed, downloading instead\n")
-				// Cache read failed, fall through to download
-			}
-		}
-
-		// Download layer (cache miss or cache read failed)
-		{
-			layerReader, err := layer.Uncompressed()
-			if err != nil {
-				os.Remove(layerTemp.Name())
-				return "", fmt.Errorf("failed to get layer content: %w", err)
-			}
-
-			// Wrap with progress reader
-			progressLayerReader := newProgressReader(layerReader, size, layerDir)
-
-			// Use tee reader to write to both temp file and cache
-			var cacheWriter io.Writer
-			cacheTemp, err := os.CreateTemp("", "cache-*.tar.gz")
-			if err == nil {
-				cacheWriter = cacheTemp
-				defer cacheTemp.Close()
-				defer os.Remove(cacheTemp.Name())
-			}
-
-			var writer io.Writer = layerTemp
-			if cacheWriter != nil {
-				writer = io.MultiWriter(layerTemp, cacheWriter)
-			}
-
-			_, err = io.Copy(writer, progressLayerReader)
-			layerReader.Close()
-			layerTemp.Close()
-
-			if err != nil {
-				os.Remove(layerTemp.Name())
-				return "", err
-			}
-
-			// Save to cache
-			if cacheWriter != nil {
-				cacheTemp.Close()
-				cacheFile, err := os.Open(cacheTemp.Name())
-				if err == nil {
-					re.layerCache.Put(diffID.String(), cacheFile, imageRef, size)
-					cacheFile.Close()
-				}
-			}
-		}
-
-	addToTar:
-
-		// Add layer to tar
-		fmt.Fprintf(os.Stderr, "Packaging layer %d/%d into archive...\r", idx+1, totalLayers)
-
-		layerFile, err := os.Open(layerTemp.Name())
-		if err != nil {
-			os.Remove(layerTemp.Name())
-			return "", err
-		}
-
-		layerInfo, err := layerFile.Stat()
-		if err != nil {
-			layerFile.Close()
-			os.Remove(layerTemp.Name())
-			return "", err
-		}
+		// Write layer to tar
+		fmt.Fprintf(os.Stderr, "Writing layer %d/%d to archive...\r", i+1, len(layers))
 
 		if err := tw.WriteHeader(&tar.Header{
 			Name: layerPath,
 			Mode: 0644,
-			Size: layerInfo.Size(),
+			Size: int64(prepared.Data.Len()),
 		}); err != nil {
-			layerFile.Close()
-			os.Remove(layerTemp.Name())
 			return "", err
 		}
 
-		if _, err := io.Copy(tw, layerFile); err != nil {
-			layerFile.Close()
-			os.Remove(layerTemp.Name())
+		if _, err := io.Copy(tw, prepared.Data); err != nil {
 			return "", err
 		}
-
-		layerFile.Close()
-		os.Remove(layerTemp.Name())
 	}
-	fmt.Fprintf(os.Stderr, "\nPackaging complete, creating final archive...\n")
+	fmt.Fprintf(os.Stderr, "\nAll layers written, finalizing archive...\n")
 
 	// Write manifest.json
 	manifest := []dockerManifest{

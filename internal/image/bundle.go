@@ -181,7 +181,14 @@ func (bg *BundleGenerator) downloadBinary(platform, outputPath string) error {
 	// Construct download URL
 	// Format: https://github.com/so2liu/imgcd/releases/download/v1.0.0/imgcd-linux-amd64.tar.gz
 	filename := fmt.Sprintf("imgcd-%s-%s.tar.gz", osName, arch)
-	url := fmt.Sprintf("https://github.com/so2liu/imgcd/releases/download/v%s/%s", bg.version, filename)
+
+	// Ensure version has v prefix (but not vv)
+	version := bg.version
+	if !strings.HasPrefix(version, "v") {
+		version = "v" + version
+	}
+
+	url := fmt.Sprintf("https://github.com/so2liu/imgcd/releases/download/%s/%s", version, filename)
 
 	// Create temporary directory for download
 	tempDir, err := os.MkdirTemp("", "imgcd-download-*")

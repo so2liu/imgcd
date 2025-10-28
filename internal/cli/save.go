@@ -13,6 +13,8 @@ var (
 	sinceRef       string
 	outDir         string
 	targetPlatform string
+	forceLocal     bool
+	noCache        bool
 )
 
 var saveCmd = &cobra.Command{
@@ -22,27 +24,38 @@ var saveCmd = &cobra.Command{
 
 imgcd creates a self-extracting shell script (.sh) that contains the imgcd
 binary and image data, allowing import on target systems without installing
-imgcd first. Images are automatically pulled for the specified target platform.
+imgcd first.
+
+Export Modes (automatic selection):
+  • Remote mode (default): Downloads layers directly from registry without
+    pulling full images locally. Saves disk space and bandwidth. Caches layers
+    at ~/.imgcd/cache/ to avoid re-downloading (use --no-cache to disable).
+  • Local mode (fallback): Uses local container runtime when images are not
+    available in registry (e.g., locally built images).
+  • Use --local flag to force local mode.
 
 The --since flag supports two formats:
   • Full reference: alpine:3.19, myrepo/app:1.0.0
   • Short form (tag only): 3.19, 1.0.0 (uses same repository as main image)
 
 Examples:
-  # Export alpine (simplest form, default to linux/amd64)
+  # Export alpine (automatically uses remote mode for registry images)
   imgcd save alpine
 
   # Full export with tag
   imgcd save ns/app:1.0.0
   # Output: ns_app-1.0.0__since-none.sh
 
-  # Incremental export
+  # Incremental export (only downloads new layers)
   imgcd save alpine:3.20 --since 3.19
   # Output: alpine-3.20__since-3.19.sh
 
   # Specify target platform
   imgcd save myapp:2.0 --target-platform linux/arm64
   imgcd save myapp:2.0 -t darwin/arm64
+
+  # Force local mode (use container runtime)
+  imgcd save myapp:dev --local
 
   # Export to custom directory
   imgcd save ns/app:2.0.0 --out-dir /tmp/bundles`,
@@ -54,6 +67,8 @@ func init() {
 	saveCmd.Flags().StringVar(&sinceRef, "since", "", "Base image reference or tag (e.g., 'alpine:3.19' or just '3.19')")
 	saveCmd.Flags().StringVar(&outDir, "out-dir", "./out", "Output directory for the exported file")
 	saveCmd.Flags().StringVarP(&targetPlatform, "target-platform", "t", "linux/amd64", "Target platform (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64)")
+	saveCmd.Flags().BoolVar(&forceLocal, "local", false, "Force using local container runtime instead of downloading directly from registry")
+	saveCmd.Flags().BoolVar(&noCache, "no-cache", false, "Disable layer caching (always download from registry)")
 }
 
 func runSave(cmd *cobra.Command, args []string) error {
@@ -87,6 +102,8 @@ func runSave(cmd *cobra.Command, args []string) error {
 	// Export image
 	opts := image.ExportOptions{
 		TargetPlatform: targetPlatform,
+		ForceLocal:     forceLocal,
+		UseCache:       !noCache, // Cache enabled by default
 	}
 	outputPath, err := exporter.Export(cmd.Context(), newRef, sinceRef, outDir, opts)
 	if err != nil {

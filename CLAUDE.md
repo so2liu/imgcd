@@ -114,6 +114,63 @@ imgcd diff alpine:3.20 --since 3.19 --output json
 imgcd diff myapp:2.0 --since 1.9 -t linux/arm64
 ```
 
+## Layer Caching
+
+Remote mode automatically caches downloaded layers at `~/.imgcd/cache/` to avoid re-downloading. This significantly speeds up repeated exports and exports of images with shared layers.
+
+**Cache behavior:**
+- Enabled by default in remote mode
+- Disabled in local mode (not needed - runtime already optimizes)
+- Use `--no-cache` flag to disable caching for a specific export
+
+**Cache management commands:**
+
+```bash
+# List all cached layers with source images
+imgcd cache list
+
+# Show cache statistics (size, hit rate, etc.)
+imgcd cache info
+
+# Remove old layers (default: 30 days)
+imgcd cache prune
+imgcd cache prune --days 60
+
+# Clean all cache
+imgcd cache clean
+imgcd cache clean --force  # Skip confirmation
+```
+
+**Cache structure:**
+```
+~/.imgcd/
+├── bin/              # Binary cache (existing)
+└── cache/
+    ├── layers/       # Layer cache
+    │   └── sha256/
+    │       └── {short-diffid}/
+    │           └── layer.tar.gz
+    └── metadata.json # Layer metadata (image ref, timestamps)
+```
+
+**Performance benefits:**
+- First export: Downloads and caches layers
+- Repeated export: Instant (reads from cache)
+- Incremental export: Only downloads new layers, reuses cached base layers
+- Cross-image reuse: Shared layers between different images are cached once
+
+**Example workflow:**
+```bash
+# First time: downloads and caches
+imgcd save postgres:15
+
+# Second time: instant (all layers cached)
+imgcd save postgres:15 --since postgres:14
+
+# Different image sharing layers: reuses cache
+imgcd save postgres:16 --since postgres:15  # Only new layers downloaded
+```
+
 ## Testing Incremental Export Locally
 
 During development (version="dev"), cross-platform bundles require:

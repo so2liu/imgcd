@@ -33,10 +33,45 @@ func NewExporter(version string) (*Exporter, error) {
 // ExportOptions contains options for exporting images
 type ExportOptions struct {
 	TargetPlatform string
+	ForceLocal     bool // Force using local runtime instead of remote mode
+	UseCache       bool // Enable layer caching (default: true)
 }
 
 // Export exports an image to a self-extracting bundle
 func (e *Exporter) Export(ctx context.Context, newRef, sinceRef, outDir string, opts ExportOptions) (string, error) {
+	// Intelligent mode selection:
+	// 1. If ForceLocal is true, use local mode
+	// 2. Otherwise, try remote mode first
+	// 3. If remote mode fails, fallback to local mode
+
+	if opts.ForceLocal {
+		fmt.Printf("Using local mode (forced)\n")
+		return e.exportLocal(ctx, newRef, sinceRef, outDir, opts)
+	}
+
+	// Try remote mode first
+	fmt.Printf("Attempting remote mode...\n")
+	result, err := e.exportRemote(ctx, newRef, sinceRef, outDir, opts)
+	if err == nil {
+		return result, nil
+	}
+
+	// Remote mode failed, fallback to local mode
+	fmt.Printf("Remote mode failed (%v), falling back to local mode...\n", err)
+	return e.exportLocal(ctx, newRef, sinceRef, outDir, opts)
+}
+
+// exportRemote exports an image using remote mode (direct download from registry)
+func (e *Exporter) exportRemote(ctx context.Context, newRef, sinceRef, outDir string, opts ExportOptions) (string, error) {
+	remoteExporter, err := NewRemoteExporter(e.version, opts.UseCache)
+	if err != nil {
+		return "", fmt.Errorf("failed to create remote exporter: %w", err)
+	}
+	return remoteExporter.ExportFromRegistry(ctx, newRef, sinceRef, outDir, opts)
+}
+
+// exportLocal exports an image using local mode (via container runtime)
+func (e *Exporter) exportLocal(ctx context.Context, newRef, sinceRef, outDir string, opts ExportOptions) (string, error) {
 	fmt.Printf("Using runtime: %s\n", e.runtime.Name())
 
 	// For self-extracting bundles, pull for the target platform

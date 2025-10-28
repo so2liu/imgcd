@@ -68,7 +68,8 @@ main() {
     echo "Extracting bundle..."
 
     # Find the line number of the payload marker
-    PAYLOAD_LINE=$(grep -n '^__PAYLOAD_BELOW__$' "$0" | head -1 | cut -d: -f1)
+    # Use -a to force grep to treat the file as text (important for large binary payloads)
+    PAYLOAD_LINE=$(grep -a -n '^__PAYLOAD_BELOW__$' "$0" | head -1 | cut -d: -f1)
     if [ -z "$PAYLOAD_LINE" ]; then
         echo -e "${RED}Error: Payload marker not found${NC}" >&2
         exit 1

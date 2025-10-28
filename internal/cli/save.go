@@ -65,7 +65,7 @@ Examples:
 
 func init() {
 	saveCmd.Flags().StringVar(&sinceRef, "since", "", "Base image reference or tag (e.g., 'alpine:3.19' or just '3.19')")
-	saveCmd.Flags().StringVar(&outDir, "out-dir", "./out", "Output directory for the exported file")
+	saveCmd.Flags().StringVarP(&outDir, "out-dir", "o", "./out", "Output directory for the exported file")
 	saveCmd.Flags().StringVarP(&targetPlatform, "target-platform", "t", "linux/amd64", "Target platform (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64)")
 	saveCmd.Flags().BoolVar(&forceLocal, "local", false, "Force using local container runtime instead of downloading directly from registry")
 	saveCmd.Flags().BoolVar(&noCache, "no-cache", false, "Disable layer caching (always download from registry)")

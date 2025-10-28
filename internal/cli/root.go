@@ -25,4 +25,5 @@ func init() {
 	rootCmd.AddCommand(saveCmd)
 	rootCmd.AddCommand(loadCmd)
 	rootCmd.AddCommand(updateCmd)
+	rootCmd.AddCommand(diffCmd)
 }

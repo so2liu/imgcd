@@ -389,7 +389,8 @@ func (re *RemoteExporter) createDockerImageTarFromRemote(config *v1.ConfigFile, 
 
 	// Write layers
 	writtenLayerPaths := []string{}
-	for _, layer := range layers {
+	totalLayers := len(layers)
+	for idx, layer := range layers {
 		digest, _ := layer.Digest()
 		diffID, _ := layer.DiffID()
 		layerDir := strings.TrimPrefix(digest.String(), "sha256:")[:12]
@@ -415,14 +416,17 @@ func (re *RemoteExporter) createDockerImageTarFromRemote(config *v1.ConfigFile, 
 			cachedReader, err := re.layerCache.Get(diffID.String())
 			if err == nil {
 				// Copy from cache
+				fmt.Fprintf(os.Stderr, "%s: Reading from cache... ", layerDir)
 				_, err = io.Copy(layerTemp, cachedReader)
 				cachedReader.Close()
 				layerTemp.Close()
 
 				if err == nil {
+					fmt.Fprintf(os.Stderr, "done\n")
 					// Successfully used cache
 					goto addToTar
 				}
+				fmt.Fprintf(os.Stderr, "failed, downloading instead\n")
 				// Cache read failed, fall through to download
 			}
 		}
@@ -475,6 +479,8 @@ func (re *RemoteExporter) createDockerImageTarFromRemote(config *v1.ConfigFile, 
 	addToTar:
 
 		// Add layer to tar
+		fmt.Fprintf(os.Stderr, "Packaging layer %d/%d into archive...\r", idx+1, totalLayers)
+
 		layerFile, err := os.Open(layerTemp.Name())
 		if err != nil {
 			os.Remove(layerTemp.Name())
@@ -507,6 +513,7 @@ func (re *RemoteExporter) createDockerImageTarFromRemote(config *v1.ConfigFile, 
 		layerFile.Close()
 		os.Remove(layerTemp.Name())
 	}
+	fmt.Fprintf(os.Stderr, "\nPackaging complete, creating final archive...\n")
 
 	// Write manifest.json
 	manifest := []dockerManifest{

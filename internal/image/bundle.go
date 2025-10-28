@@ -3,6 +3,7 @@ package image
 import (
 	"archive/tar"
 	"compress/gzip"
+	_ "embed"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -12,6 +13,9 @@ import (
 	goruntime "runtime"
 	"strings"
 )
+
+//go:embed templates/self-extractor.sh
+var selfExtractorTemplate string
 
 // BundleGenerator generates self-extracting bundle scripts
 type BundleGenerator struct {
@@ -33,13 +37,6 @@ func (bg *BundleGenerator) GenerateBundle(imageTarGzPath, outputPath, targetPlat
 		return fmt.Errorf("failed to get imgcd binary: %w", err)
 	}
 
-	// Read template
-	templatePath := filepath.Join(getProjectRoot(), "templates", "self-extractor.sh")
-	templateContent, err := os.ReadFile(templatePath)
-	if err != nil {
-		return fmt.Errorf("failed to read template: %w", err)
-	}
-
 	// Read and encode binary
 	binaryData, err := os.ReadFile(binaryPath)
 	if err != nil {
@@ -54,8 +51,8 @@ func (bg *BundleGenerator) GenerateBundle(imageTarGzPath, outputPath, targetPlat
 	}
 	imageBase64 := base64.StdEncoding.EncodeToString(imageData)
 
-	// Replace placeholders
-	content := string(templateContent)
+	// Replace placeholders in embedded template
+	content := selfExtractorTemplate
 	content = strings.ReplaceAll(content, "{{TARGET_PLATFORM}}", targetPlatform)
 	content = strings.ReplaceAll(content, "{{IMAGE_NAME}}", imageName)
 	content = strings.ReplaceAll(content, "{{IMGCD_VERSION}}", bg.version)
@@ -303,26 +300,4 @@ func gzipNewReader(path string) (*gzip.Reader, error) {
 
 func tarNewReader(r io.Reader) *tar.Reader {
 	return tar.NewReader(r)
-}
-
-// getProjectRoot returns the project root directory
-func getProjectRoot() string {
-	// Try to find the project root by looking for go.mod
-	dir, err := os.Getwd()
-	if err != nil {
-		return "."
-	}
-
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			// Reached root
-			return "."
-		}
-		dir = parent
-	}
 }

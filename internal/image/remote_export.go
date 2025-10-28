@@ -246,13 +246,13 @@ func (re *RemoteExporter) ExportFromRegistry(ctx context.Context, newRef, sinceR
 		return "", fmt.Errorf("failed to create bundle: %w", err)
 	}
 
-	// Create self-extracting script
-	fmt.Printf("Creating self-extracting bundle for %s...\n", opts.TargetPlatform)
+	// Create tar bundle
+	fmt.Printf("Creating bundle for %s...\n", opts.TargetPlatform)
 	bundlePath := generateFilename(repo, tag, fullSinceRef, outDir, false)
 
 	bundleGen := NewBundleGenerator(re.version)
 	if err := bundleGen.GenerateBundle(tarGzPath, bundlePath, opts.TargetPlatform, newRef); err != nil {
-		return "", fmt.Errorf("failed to create self-extracting bundle: %w", err)
+		return "", fmt.Errorf("failed to create bundle: %w", err)
 	}
 
 	// Remove the intermediate tar.gz file

@@ -143,8 +143,8 @@ func (e *Exporter) exportLocal(ctx context.Context, newRef, sinceRef, outDir str
 		return "", err
 	}
 
-	// Create self-extracting bundle
-	fmt.Printf("Creating self-extracting bundle for %s...\n", opts.TargetPlatform)
+	// Create tar bundle
+	fmt.Printf("Creating bundle for %s...\n", opts.TargetPlatform)
 	bundlePath := generateFilename(repo, tag, sinceRef, outDir, false)
 
 	bundleGen := NewBundleGenerator(e.version)
@@ -255,7 +255,7 @@ func generateFilename(repo, tag, sinceRef, outDir string, isTarGz bool) string {
 	}
 
 	// Choose extension based on format
-	ext := ".sh"
+	ext := ".tar"
 	if isTarGz {
 		ext = ".tar.gz"
 	}

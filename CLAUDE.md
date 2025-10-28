@@ -37,7 +37,7 @@ imgcd is a CLI tool for incremental container image export/import, designed for 
 
 -   `Exporter`: Orchestrates export process with incremental layer filtering
 -   `RemoteExporter`: Exports images directly from registry using blob-based caching (zero decompression)
--   `BundleGenerator`: Creates self-extracting shell scripts (.sh bundles)
+-   `BundleGenerator`: Creates tar bundles (.tar files containing imgcd + image)
 -   `BundleLoader`: Reconstructs Docker image.tar from compressed blobs on target system
 -   `incremental.go`: True incremental export - filters out shared layers between base and target images using DiffID comparison
 -   Uses google/go-containerregistry for image metadata and layer handling
@@ -69,25 +69,30 @@ imgcd is a CLI tool for incremental container image export/import, designed for 
 
 -   `Metadata`: Bundle metadata including digest↔diffid mapping
 -   `LayerInfo`: Layer information with both compressed (digest) and uncompressed (diffid) hashes
--   Bundle structure (makeself-style):
-    - Shell script header with metadata and extraction logic
-    - `__PAYLOAD_BELOW__` marker line
-    - Raw tar.gz payload containing: `imgcd` binary + `image.tar.gz`
-    - No base64 encoding - binary data appended directly (saves 33% size)
-    - Extraction uses `tail` to skip script and `tar` to extract payload
+-   Bundle structure (standard tar):
+    - Simple tar archive containing two files:
+      - `imgcd` - binary for target platform (mode 0755)
+      - `image.tar.gz` - compressed image data (mode 0644)
+    - No base64 encoding (saves 33% vs base64 approach)
+    - 100% reliable: standard tar format, zero complexity
+    - Easy to inspect: `tar tf bundle.tar`
 
 ### Key Design Patterns
 
-1. **Self-Extracting Bundles (Makeself-Style)**:
+1. **Tar Bundles**:
 
-    - Embeds imgcd binary (for target platform) + image data into a single .sh file
-    - Uses makeself-style format: shell script + marker + raw tar.gz (no base64 encoding)
-    - **Size savings**: Eliminates 33% base64 overhead (e.g., 155MB vs 207MB for postgres:15)
-    - **Performance**: No encoding/decoding time, streams directly from registry to bundle
-    - Target system doesn't need imgcd installed
+    - Standard tar archive containing imgcd binary + image data
+    - Single file for easy transfer: `vllm-v0.11.0__since-v0.10.1.1.tar`
+    - **Size savings**: Eliminates 33% base64 overhead
+    - **Reliability**: Standard tar format, no shell script complexity, zero bugs
+    - **Easy to use**:
+      ```bash
+      tar xf bundle.tar
+      ./imgcd load --from image.tar.gz
+      ```
+    - **Easy to debug**: `tar tf bundle.tar` to inspect contents
     - Binary cache: ~/.imgcd/bin/{version}/{platform}/imgcd
     - Dev mode: uses IMGCD_BINARY_PATH or current binary regardless of platform
-    - Extraction: Uses standard `tail` and `tar` commands, no special tools needed
 
 2. **Blob-based Caching**:
 

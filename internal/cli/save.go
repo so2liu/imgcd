@@ -111,10 +111,10 @@ func runSave(cmd *cobra.Command, args []string) error {
 	}
 
 	absPath, _ := filepath.Abs(outputPath)
-	fmt.Printf("✓ Successfully created self-extracting bundle: %s\n", absPath)
+	fmt.Printf("✓ Successfully created bundle: %s\n", absPath)
 	fmt.Printf("\nTo import on target system (%s):\n", targetPlatform)
-	fmt.Printf("  chmod +x %s\n", filepath.Base(absPath))
-	fmt.Printf("  ./%s\n", filepath.Base(absPath))
+	fmt.Printf("  tar xf %s\n", filepath.Base(absPath))
+	fmt.Printf("  ./imgcd load --from image.tar.gz\n")
 
 	return nil
 }

@@ -69,16 +69,25 @@ imgcd is a CLI tool for incremental container image export/import, designed for 
 
 -   `Metadata`: Bundle metadata including digest↔diffid mapping
 -   `LayerInfo`: Layer information with both compressed (digest) and uncompressed (diffid) hashes
--   Bundle structure: `metadata.json` + `blobs/sha256/{digest}`
+-   Bundle structure (makeself-style):
+    - Shell script header with metadata and extraction logic
+    - `__PAYLOAD_BELOW__` marker line
+    - Raw tar.gz payload containing: `imgcd` binary + `image.tar.gz`
+    - No base64 encoding - binary data appended directly (saves 33% size)
+    - Extraction uses `tail` to skip script and `tar` to extract payload
 
 ### Key Design Patterns
 
-1. **Self-Extracting Bundles**:
+1. **Self-Extracting Bundles (Makeself-Style)**:
 
     - Embeds imgcd binary (for target platform) + image data into a single .sh file
+    - Uses makeself-style format: shell script + marker + raw tar.gz (no base64 encoding)
+    - **Size savings**: Eliminates 33% base64 overhead (e.g., 155MB vs 207MB for postgres:15)
+    - **Performance**: No encoding/decoding time, streams directly from registry to bundle
     - Target system doesn't need imgcd installed
     - Binary cache: ~/.imgcd/bin/{version}/{platform}/imgcd
-    - Dev mode: uses IMGCD_BINARY_PATH or current binary if platform matches
+    - Dev mode: uses IMGCD_BINARY_PATH or current binary regardless of platform
+    - Extraction: Uses standard `tail` and `tar` commands, no special tools needed
 
 2. **Blob-based Caching**:
 
@@ -235,3 +244,4 @@ IMGCD_BINARY_PATH=./imgcd-linux-amd64 ./imgcd save alpine -t linux/amd64
 -   除非用户明确要求，否则不要轻易 tag，因为这样会导致发版
 -   通过 git tag -a v0.3.1 -m "Release message" 的方式发版，认真写超级简短的 release message
 - 除非用户明确要求，否则发版只发最小版本号
+- 发版要通过gh

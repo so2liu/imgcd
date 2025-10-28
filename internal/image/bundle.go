@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	_ "embed"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,42 +28,133 @@ func NewBundleGenerator(version string) *BundleGenerator {
 	}
 }
 
-// GenerateBundle creates a self-extracting shell script bundle
+// GenerateBundle creates a self-extracting shell script bundle (makeself-style)
 func (bg *BundleGenerator) GenerateBundle(imageTarGzPath, outputPath, targetPlatform, imageName string) error {
+	fmt.Printf("Creating self-extracting bundle...\n")
+
 	// Get imgcd binary for target platform
 	binaryPath, err := bg.getOrDownloadBinary(targetPlatform)
 	if err != nil {
 		return fmt.Errorf("failed to get imgcd binary: %w", err)
 	}
 
-	// Read and encode binary
-	binaryData, err := os.ReadFile(binaryPath)
+	// Create payload tar.gz containing imgcd binary and image data
+	fmt.Printf("Creating payload archive...\n")
+	payloadPath, err := bg.createPayloadTarGz(binaryPath, imageTarGzPath)
 	if err != nil {
-		return fmt.Errorf("failed to read binary: %w", err)
+		return fmt.Errorf("failed to create payload: %w", err)
 	}
-	binaryBase64 := base64.StdEncoding.EncodeToString(binaryData)
+	defer os.Remove(payloadPath)
 
-	// Read and encode image data
-	imageData, err := os.ReadFile(imageTarGzPath)
+	// Get payload size for progress info
+	payloadInfo, err := os.Stat(payloadPath)
 	if err != nil {
-		return fmt.Errorf("failed to read image data: %w", err)
+		return fmt.Errorf("failed to stat payload: %w", err)
 	}
-	imageBase64 := base64.StdEncoding.EncodeToString(imageData)
+	payloadSizeMB := float64(payloadInfo.Size()) / (1024 * 1024)
 
-	// Replace placeholders in embedded template
-	content := selfExtractorTemplate
-	content = strings.ReplaceAll(content, "{{TARGET_PLATFORM}}", targetPlatform)
-	content = strings.ReplaceAll(content, "{{IMAGE_NAME}}", imageName)
-	content = strings.ReplaceAll(content, "{{IMGCD_VERSION}}", bg.version)
-	content = strings.ReplaceAll(content, "{{IMGCD_BINARY_BASE64}}", binaryBase64)
-	content = strings.ReplaceAll(content, "{{IMAGE_DATA_BASE64}}", imageBase64)
+	fmt.Printf("Writing self-extracting header...\n")
 
-	// Write output file
-	if err := os.WriteFile(outputPath, []byte(content), 0755); err != nil {
-		return fmt.Errorf("failed to write bundle: %w", err)
+	// Create output file
+	outFile, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer outFile.Close()
+
+	// Write shell script header with metadata
+	scriptHeader := selfExtractorTemplate
+	scriptHeader = strings.ReplaceAll(scriptHeader, "{{TARGET_PLATFORM}}", targetPlatform)
+	scriptHeader = strings.ReplaceAll(scriptHeader, "{{IMAGE_NAME}}", imageName)
+	scriptHeader = strings.ReplaceAll(scriptHeader, "{{IMGCD_VERSION}}", bg.version)
+
+	if _, err := outFile.WriteString(scriptHeader); err != nil {
+		return fmt.Errorf("failed to write script header: %w", err)
 	}
 
+	// Write marker line that separates script from payload
+	if _, err := outFile.WriteString("\nexit 0\n__PAYLOAD_BELOW__\n"); err != nil {
+		return fmt.Errorf("failed to write marker: %w", err)
+	}
+
+	// Append raw tar.gz payload
+	fmt.Printf("Appending binary payload (%.1f MB)...\n", payloadSizeMB)
+	payloadFile, err := os.Open(payloadPath)
+	if err != nil {
+		return fmt.Errorf("failed to open payload: %w", err)
+	}
+	defer payloadFile.Close()
+
+	written, err := io.Copy(outFile, payloadFile)
+	if err != nil {
+		return fmt.Errorf("failed to write payload: %w", err)
+	}
+
+	// Make bundle executable
+	if err := os.Chmod(outputPath, 0755); err != nil {
+		return fmt.Errorf("failed to make bundle executable: %w", err)
+	}
+
+	fmt.Printf("Bundle created successfully (%.1f MB total)\n", float64(written+int64(len(scriptHeader)))/(1024*1024))
 	return nil
+}
+
+// createPayloadTarGz creates a tar.gz archive containing imgcd binary and image data
+func (bg *BundleGenerator) createPayloadTarGz(binaryPath, imageTarGzPath string) (string, error) {
+	// Create temp file for payload
+	tempFile, err := os.CreateTemp("", "imgcd-payload-*.tar.gz")
+	if err != nil {
+		return "", err
+	}
+	tempPath := tempFile.Name()
+	defer tempFile.Close()
+
+	// Create gzip writer
+	gzw := gzip.NewWriter(tempFile)
+	defer gzw.Close()
+
+	// Create tar writer
+	tw := tar.NewWriter(gzw)
+	defer tw.Close()
+
+	// Add imgcd binary
+	if err := addFileToTar(tw, binaryPath, "imgcd", 0755); err != nil {
+		return "", fmt.Errorf("failed to add imgcd binary: %w", err)
+	}
+
+	// Add image tar.gz
+	if err := addFileToTar(tw, imageTarGzPath, "image.tar.gz", 0644); err != nil {
+		return "", fmt.Errorf("failed to add image data: %w", err)
+	}
+
+	return tempPath, nil
+}
+
+// addFileToTar adds a file to a tar archive
+func addFileToTar(tw *tar.Writer, filePath, tarPath string, mode int64) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+
+	header := &tar.Header{
+		Name: tarPath,
+		Mode: mode,
+		Size: info.Size(),
+	}
+
+	if err := tw.WriteHeader(header); err != nil {
+		return err
+	}
+
+	_, err = io.Copy(tw, file)
+	return err
 }
 
 // getOrDownloadBinary gets the imgcd binary for the specified platform

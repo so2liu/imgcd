@@ -238,7 +238,7 @@ func (re *RemoteExporter) ExportFromRegistry(ctx context.Context, newRef, sinceR
 
 	// Generate output paths
 	repo, tag := parseReference(newRef)
-	tarGzPath := generateFilename(repo, tag, sinceRef, outDir, true)
+	tarGzPath := generateFilename(repo, tag, fullSinceRef, outDir, true)
 
 	// Create the bundle tar.gz
 	fmt.Printf("\nPacking blobs into bundle...\n")
@@ -248,7 +248,7 @@ func (re *RemoteExporter) ExportFromRegistry(ctx context.Context, newRef, sinceR
 
 	// Create self-extracting script
 	fmt.Printf("Creating self-extracting bundle for %s...\n", opts.TargetPlatform)
-	bundlePath := generateFilename(repo, tag, sinceRef, outDir, false)
+	bundlePath := generateFilename(repo, tag, fullSinceRef, outDir, false)
 
 	bundleGen := NewBundleGenerator(re.version)
 	if err := bundleGen.GenerateBundle(tarGzPath, bundlePath, opts.TargetPlatform, newRef); err != nil {

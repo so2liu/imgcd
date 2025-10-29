@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/so2liu/imgcd/internal/bundle"
 	"github.com/so2liu/imgcd/internal/runtime"
 )
@@ -111,10 +112,24 @@ func (bl *BundleLoader) LoadBundle(ctx context.Context, bundlePath string) error
 		}
 	}
 
+	// For incremental imports, get base image info
+	var baseImageDir string
+	if metadata.BaseRef != "" {
+		fmt.Printf("\nExporting base image from local runtime: %s\n", metadata.BaseRef)
+		fmt.Printf("(This may take a while for large images...)\n")
+		var err error
+		baseImageDir, err = bl.extractBaseImage(ctx, metadata.BaseRef)
+		if err != nil {
+			return fmt.Errorf("incremental import requires base image %s: %w", metadata.BaseRef, err)
+		}
+		defer os.RemoveAll(baseImageDir)
+		fmt.Printf("Base image exported successfully\n")
+	}
+
 	// Reconstruct Docker image.tar
 	fmt.Printf("Reconstructing Docker image.tar...\n")
 	imageTarPath := filepath.Join(tempDir, "image.tar")
-	if err := bl.rebuildImageTar(imageTarPath, tempDir, &metadata); err != nil {
+	if err := bl.rebuildImageTar(imageTarPath, tempDir, &metadata, baseImageDir); err != nil {
 		return fmt.Errorf("failed to rebuild image.tar: %w", err)
 	}
 
@@ -135,7 +150,8 @@ func (bl *BundleLoader) LoadBundle(ctx context.Context, bundlePath string) error
 }
 
 // rebuildImageTar reconstructs a Docker-format image.tar from blobs
-func (bl *BundleLoader) rebuildImageTar(outputPath, blobDir string, metadata *bundle.Metadata) error {
+// If baseImageDir is provided (incremental), merges base image layers with new layers
+func (bl *BundleLoader) rebuildImageTar(outputPath, blobDir string, metadata *bundle.Metadata, baseImageDir string) error {
 	outFile, err := os.Create(outputPath)
 	if err != nil {
 		return err
@@ -145,16 +161,47 @@ func (bl *BundleLoader) rebuildImageTar(outputPath, blobDir string, metadata *bu
 	tw := tar.NewWriter(outFile)
 	defer tw.Close()
 
-	// Write config file
-	configBytes, err := json.Marshal(metadata.Config)
+	// Use metadata's full config (already contains all layers)
+	mergedConfig := metadata.Config
+	var writtenLayerPaths []string
+	var totalLayers int
+
+	if baseImageDir != "" && metadata.SharedLayerCount > 0 {
+		// Incremental: copy shared layers from base, then add new layers
+		_, baseLayers, err := bl.parseBaseImage(baseImageDir)
+		if err != nil {
+			return fmt.Errorf("failed to parse base image: %w", err)
+		}
+
+		// Validate we have enough base layers
+		if metadata.SharedLayerCount > len(baseLayers) {
+			return fmt.Errorf("base image has %d layers but need %d shared layers", len(baseLayers), metadata.SharedLayerCount)
+		}
+
+		// Copy first N layers from base image (shared layers)
+		totalLayers = metadata.SharedLayerCount + len(metadata.Layers)
+		for i := 0; i < metadata.SharedLayerCount; i++ {
+			layerPath := baseLayers[i]
+			fmt.Printf("Processing base layer %d/%d...\r", i+1, totalLayers)
+			if err := bl.copyLayerToTar(tw, filepath.Join(baseImageDir, layerPath), layerPath); err != nil {
+				return fmt.Errorf("failed to copy base layer: %w", err)
+			}
+			writtenLayerPaths = append(writtenLayerPaths, layerPath)
+		}
+	} else {
+		// Full export: all layers from bundle
+		totalLayers = len(metadata.Layers)
+	}
+
+	// Write merged config
+	configBytes, err := json.Marshal(mergedConfig)
 	if err != nil {
 		return err
 	}
 
-	// Generate config filename from first layer diffID
 	configHash := "unknown"
-	if len(metadata.Layers) > 0 {
-		configHash = strings.TrimPrefix(metadata.Layers[0].DiffID, "sha256:")[:12]
+	if len(mergedConfig.RootFS.DiffIDs) > 0 {
+		configHash = strings.TrimPrefix(mergedConfig.RootFS.DiffIDs[0].String(), "sha256:")[:12]
 	}
 	configName := configHash + ".json"
 
@@ -169,11 +216,10 @@ func (bl *BundleLoader) rebuildImageTar(outputPath, blobDir string, metadata *bu
 		return err
 	}
 
-	// Process each layer: decompress, verify, write to tar
-	var writtenLayerPaths []string
-
+	// Process new layers from bundle
+	baseLayerCount := len(writtenLayerPaths)
 	for i, layerInfo := range metadata.Layers {
-		fmt.Printf("Processing layer %d/%d...\r", i+1, len(metadata.Layers))
+		fmt.Printf("Processing layer %d/%d...\r", baseLayerCount+i+1, totalLayers)
 
 		// Get blob path
 		hash := strings.TrimPrefix(layerInfo.Digest, "sha256:")
@@ -329,6 +375,129 @@ func (bl *BundleLoader) extractFile(tr *tar.Reader, outputPath string) error {
 
 	// Copy content
 	if _, err := io.Copy(outFile, tr); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// extractBaseImage exports the base image from runtime and extracts it to a temp directory
+func (bl *BundleLoader) extractBaseImage(ctx context.Context, baseRef string) (string, error) {
+	// Create temp directory for extracted base image
+	tempDir, err := os.MkdirTemp("", "imgcd-base-*")
+	if err != nil {
+		return "", err
+	}
+
+	// Create temp file for base image tar
+	baseTarFile, err := os.CreateTemp("", "base-*.tar")
+	if err != nil {
+		os.RemoveAll(tempDir)
+		return "", err
+	}
+	baseTarPath := baseTarFile.Name()
+	baseTarFile.Close()
+	defer os.Remove(baseTarPath)
+
+	// Save base image to tar
+	if err := bl.runtime.SaveImage(ctx, baseRef, baseTarPath); err != nil {
+		os.RemoveAll(tempDir)
+		return "", fmt.Errorf("failed to save base image: %w", err)
+	}
+
+	// Extract base image tar
+	baseTar, err := os.Open(baseTarPath)
+	if err != nil {
+		os.RemoveAll(tempDir)
+		return "", err
+	}
+	defer baseTar.Close()
+
+	tr := tar.NewReader(baseTar)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			os.RemoveAll(tempDir)
+			return "", err
+		}
+
+		targetPath := filepath.Join(tempDir, header.Name)
+		if header.Typeflag == tar.TypeDir {
+			if err := os.MkdirAll(targetPath, 0755); err != nil {
+				os.RemoveAll(tempDir)
+				return "", err
+			}
+		} else {
+			if err := bl.extractFile(tr, targetPath); err != nil {
+				os.RemoveAll(tempDir)
+				return "", err
+			}
+		}
+	}
+
+	return tempDir, nil
+}
+
+// parseBaseImage parses the extracted base image directory and returns config and layer paths
+func (bl *BundleLoader) parseBaseImage(baseImageDir string) (*v1.ConfigFile, []string, error) {
+	// Read manifest.json to get config and layers
+	manifestPath := filepath.Join(baseImageDir, "manifest.json")
+	manifestData, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read manifest.json: %w", err)
+	}
+
+	var manifests []dockerManifest
+	if err := json.Unmarshal(manifestData, &manifests); err != nil {
+		return nil, nil, fmt.Errorf("failed to parse manifest.json: %w", err)
+	}
+
+	if len(manifests) == 0 {
+		return nil, nil, fmt.Errorf("no manifests found in base image")
+	}
+
+	manifest := manifests[0]
+
+	// Read config file
+	configPath := filepath.Join(baseImageDir, manifest.Config)
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read config: %w", err)
+	}
+
+	var config v1.ConfigFile
+	if err := json.Unmarshal(configData, &config); err != nil {
+		return nil, nil, fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	return &config, manifest.Layers, nil
+}
+
+// copyLayerToTar copies a layer file from source to the tar writer
+func (bl *BundleLoader) copyLayerToTar(tw *tar.Writer, sourcePath, tarPath string) error {
+	layerFile, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer layerFile.Close()
+
+	info, err := layerFile.Stat()
+	if err != nil {
+		return err
+	}
+
+	if err := tw.WriteHeader(&tar.Header{
+		Name: tarPath,
+		Mode: 0644,
+		Size: info.Size(),
+	}); err != nil {
+		return err
+	}
+
+	if _, err := io.Copy(tw, layerFile); err != nil {
 		return err
 	}
 

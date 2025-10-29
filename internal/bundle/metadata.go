@@ -18,6 +18,10 @@ type Metadata struct {
 	// Empty if this is a full export
 	BaseRef string `json:"base_ref,omitempty"`
 
+	// SharedLayerCount is the number of layers shared with base image
+	// Used during incremental import to know how many layers to get from base
+	SharedLayerCount int `json:"shared_layer_count,omitempty"`
+
 	// Platform is the target platform (e.g., "linux/amd64")
 	Platform string `json:"platform"`
 

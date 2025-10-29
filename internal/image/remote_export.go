@@ -81,6 +81,7 @@ func (re *RemoteExporter) ExportFromRegistry(ctx context.Context, newRef, sinceR
 	// Determine layers to export
 	var layersToExport []v1.Layer
 	var layerInfos []bundle.LayerInfo
+	var sharedLayerCount int // Number of layers shared with base
 	fullSinceRef := ""
 
 	if sinceRef != "" {
@@ -108,7 +109,7 @@ func (re *RemoteExporter) ExportFromRegistry(ctx context.Context, newRef, sinceR
 			baseDiffIDs[diffID.String()] = true
 		}
 
-		// Filter out shared layers
+		// Filter out shared layers (but keep full config/manifest)
 		fmt.Printf("Creating incremental export...\n")
 		var filteredSize int64
 		var totalSize int64
@@ -129,6 +130,7 @@ func (re *RemoteExporter) ExportFromRegistry(ctx context.Context, newRef, sinceR
 
 			if baseDiffIDs[diffID.String()] {
 				filteredSize += size
+				sharedLayerCount++ // Count shared layers
 				continue
 			}
 
@@ -149,7 +151,7 @@ func (re *RemoteExporter) ExportFromRegistry(ctx context.Context, newRef, sinceR
 		}
 
 		fmt.Printf("Filtered %d/%d layers (saved %.1f MB)\n",
-			len(newLayers)-len(layersToExport), len(newLayers),
+			sharedLayerCount, len(newLayers),
 			float64(filteredSize)/(1024*1024))
 	} else {
 		// Full export
@@ -218,17 +220,19 @@ func (re *RemoteExporter) ExportFromRegistry(ctx context.Context, newRef, sinceR
 		fmt.Printf("Cache hits: %d/%d blobs\n", cacheHits, len(results))
 	}
 
-	// Create bundle metadata
+	// Create bundle metadata with full config/manifest
+	// For incremental exports, Layers contains only new layers but Config/Manifest are complete
 	metadata := bundle.Metadata{
-		Version:   "2",
-		ImageRef:  newRef,
-		BaseRef:   fullSinceRef,
-		Platform:  opts.TargetPlatform,
-		Manifest:  manifest,
-		Config:    configFile,
-		Layers:    layerInfos,
-		TotalSize: calculateTotalSize(layerInfos),
-		CreatedAt: time.Now().Format(time.RFC3339),
+		Version:          "2",
+		ImageRef:         newRef,
+		BaseRef:          fullSinceRef,
+		SharedLayerCount: sharedLayerCount,
+		Platform:         opts.TargetPlatform,
+		Manifest:         manifest,   // Full manifest (all layers)
+		Config:           configFile, // Full config (all DiffIDs and History)
+		Layers:           layerInfos, // Only new layers for incremental
+		TotalSize:        calculateTotalSize(layerInfos),
+		CreatedAt:        time.Now().Format(time.RFC3339),
 	}
 
 	// Create output directory

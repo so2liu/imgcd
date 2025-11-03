@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
@@ -62,8 +63,13 @@ func (f *Fetcher) FetchImageMetadata(ctx context.Context, imageRef string, platf
 		return nil, fmt.Errorf("failed to parse platform %q: %w", platformSpec, err)
 	}
 
-	// Build remote options with platform
-	opts := append(f.options, remote.WithContext(ctx), remote.WithPlatform(*platform))
+	// Build remote options with platform and authentication
+	// Use DefaultKeychain to automatically read Docker credentials from ~/.docker/config.json
+	opts := append(f.options,
+		remote.WithContext(ctx),
+		remote.WithPlatform(*platform),
+		remote.WithAuthFromKeychain(authn.DefaultKeychain),
+	)
 
 	// Fetch the image descriptor (manifest and config only, no layers)
 	t1 := time.Now()

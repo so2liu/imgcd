@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
@@ -66,10 +67,21 @@ func (re *RemoteExporter) ExportFromRegistry(ctx context.Context, newRef, sinceR
 	if err != nil {
 		return "", fmt.Errorf("failed to get manifest: %w", err)
 	}
+	if manifest == nil {
+		return "", fmt.Errorf("manifest is nil")
+	}
 
 	configFile, err := newImage.ConfigFile()
 	if err != nil {
 		return "", fmt.Errorf("failed to get config file: %w", err)
+	}
+
+	// Validate config file
+	if configFile == nil {
+		return "", fmt.Errorf("config file is nil")
+	}
+	if len(configFile.RootFS.DiffIDs) == 0 {
+		return "", fmt.Errorf("config file has no layers (RootFS.DiffIDs is empty)")
 	}
 
 	// Get layers
@@ -349,6 +361,7 @@ func (re *RemoteExporter) fetchImage(ctx context.Context, imageRef string, platf
 	opts := []remote.Option{
 		remote.WithContext(ctx),
 		remote.WithPlatform(*platform),
+		remote.WithAuthFromKeychain(authn.DefaultKeychain),
 	}
 
 	desc, err := remote.Get(ref, opts...)

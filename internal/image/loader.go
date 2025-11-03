@@ -161,6 +161,14 @@ func (bl *BundleLoader) rebuildImageTar(outputPath, blobDir string, metadata *bu
 	tw := tar.NewWriter(outFile)
 	defer tw.Close()
 
+	// Validate metadata.Config
+	if metadata.Config == nil {
+		return fmt.Errorf("metadata.Config is nil")
+	}
+	if len(metadata.Config.RootFS.DiffIDs) == 0 {
+		return fmt.Errorf("metadata.Config.RootFS.DiffIDs is empty")
+	}
+
 	// Use metadata's full config (already contains all layers)
 	mergedConfig := metadata.Config
 	var writtenLayerPaths []string
@@ -295,6 +303,9 @@ func (bl *BundleLoader) rebuildImageTar(outputPath, blobDir string, metadata *bu
 
 	// Write repositories file
 	repo, tag := parseReference(metadata.ImageRef)
+	if len(writtenLayerPaths) == 0 {
+		return fmt.Errorf("no layers written to image.tar")
+	}
 	repositories := map[string]map[string]string{
 		repo: {
 			tag: strings.TrimPrefix(writtenLayerPaths[len(writtenLayerPaths)-1], "sha256:")[:12],

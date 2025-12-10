@@ -122,10 +122,29 @@ func (re *RemoteExporter) ExportFromRegistry(ctx context.Context, newRef, sinceR
 		}
 
 		// Filter out shared layers (but keep full config/manifest)
+		// IMPORTANT: Only count consecutive shared layers from the start
+		// Non-consecutive shared layers (e.g., layer 9 is shared but layer 4-8 are new)
+		// cannot be reused because loader assumes shared layers are at the beginning
 		fmt.Printf("Creating incremental export...\n")
 		var filteredSize int64
 		var totalSize int64
 
+		// First pass: find consecutive shared layers from start
+		for i, layer := range newLayers {
+			diffID, err := layer.DiffID()
+			if err != nil {
+				return "", fmt.Errorf("failed to get layer DiffID: %w", err)
+			}
+			if baseDiffIDs[diffID.String()] {
+				sharedLayerCount++
+			} else {
+				// Stop counting at first non-shared layer
+				break
+			}
+			_ = i // silence unused variable warning
+		}
+
+		// Second pass: build layer infos for all layers after shared prefix
 		for i, layer := range newLayers {
 			diffID, err := layer.DiffID()
 			if err != nil {
@@ -140,9 +159,9 @@ func (re *RemoteExporter) ExportFromRegistry(ctx context.Context, newRef, sinceR
 			size, _ := layer.Size()
 			totalSize += size
 
-			if baseDiffIDs[diffID.String()] {
+			// Skip layers in the shared prefix
+			if i < sharedLayerCount {
 				filteredSize += size
-				sharedLayerCount++ // Count shared layers
 				continue
 			}
 

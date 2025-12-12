@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -168,4 +169,62 @@ func (f *Fetcher) FetchImageMetadata(ctx context.Context, imageRef string, platf
 		TotalSize:  totalSize,
 		ConfigFile: configFile,
 	}, nil
+}
+
+// ListTags lists all tags for a given repository
+func (f *Fetcher) ListTags(ctx context.Context, repository string) ([]string, error) {
+	repo, err := name.NewRepository(repository)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse repository %q: %w", repository, err)
+	}
+
+	opts := append(f.options,
+		remote.WithContext(ctx),
+		remote.WithAuthFromKeychain(authn.DefaultKeychain),
+	)
+
+	tags, err := remote.List(repo, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tags: %w", err)
+	}
+
+	return tags, nil
+}
+
+// ResolveTag resolves a tag input to an exact tag.
+// Priority:
+// 1. Exact match - if tag exists as-is, return it
+// 2. Fuzzy match - find tags containing the input
+//   - If exactly one match, return it
+//   - If multiple matches, return ("", matches, nil) for user selection
+//   - If no matches, return error
+func (f *Fetcher) ResolveTag(ctx context.Context, repository, tagInput string) (string, []string, error) {
+	tags, err := f.ListTags(ctx, repository)
+	if err != nil {
+		return "", nil, err
+	}
+
+	// 1. Try exact match first
+	for _, tag := range tags {
+		if tag == tagInput {
+			return tag, nil, nil // Exact match found
+		}
+	}
+
+	// 2. Fuzzy match - find tags containing the input
+	var matches []string
+	for _, tag := range tags {
+		if strings.Contains(tag, tagInput) {
+			matches = append(matches, tag)
+		}
+	}
+
+	switch len(matches) {
+	case 0:
+		return "", nil, fmt.Errorf("no tags found matching %q in %s", tagInput, repository)
+	case 1:
+		return matches[0], nil, nil // Single fuzzy match
+	default:
+		return "", matches, nil // Multiple matches - need user selection
+	}
 }

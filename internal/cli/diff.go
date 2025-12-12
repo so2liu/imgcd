@@ -3,8 +3,10 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/so2liu/imgcd/internal/diff"
+	"github.com/so2liu/imgcd/internal/prompt"
 	"github.com/so2liu/imgcd/internal/remote"
 	"github.com/spf13/cobra"
 )
@@ -62,8 +64,42 @@ func runDiff(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--since flag is required")
 	}
 
-	// Normalize base reference (support short tags)
-	baseRef := normalizeReference(newRef, diffSinceRef)
+	// Resolve base reference with fuzzy matching
+	var baseRef string
+	if !strings.Contains(diffSinceRef, "/") && !strings.Contains(diffSinceRef, ":") {
+		// Short tag format - resolve with exact-first-then-fuzzy logic
+		repo := newRef
+		if idx := lastIndex(repo, ":"); idx != -1 {
+			repo = repo[:idx]
+		}
+
+		fetcher := remote.NewFetcher()
+		exactTag, matches, err := fetcher.ResolveTag(cmd.Context(), repo, diffSinceRef)
+		if err != nil {
+			return err
+		}
+
+		if exactTag != "" {
+			// Exact or single fuzzy match
+			if exactTag != diffSinceRef {
+				fmt.Printf("Resolved --since %q to tag: %s\n", diffSinceRef, exactTag)
+			}
+			baseRef = fmt.Sprintf("%s:%s", repo, exactTag)
+		} else {
+			// Multiple matches - prompt user
+			selected, err := prompt.PromptSelection(
+				fmt.Sprintf("Multiple tags found matching %q:", diffSinceRef),
+				matches,
+			)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Selected: %s\n", selected)
+			baseRef = fmt.Sprintf("%s:%s", repo, selected)
+		}
+	} else {
+		baseRef = normalizeReference(newRef, diffSinceRef)
+	}
 
 	// Validate target platform
 	validPlatforms := []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"}

@@ -18,6 +18,7 @@ import (
 	"github.com/klauspost/pgzip"
 	"github.com/so2liu/imgcd/internal/bundle"
 	"github.com/so2liu/imgcd/internal/cache"
+	"github.com/so2liu/imgcd/internal/prompt"
 	remotedownload "github.com/so2liu/imgcd/internal/remote"
 )
 
@@ -97,8 +98,38 @@ func (re *RemoteExporter) ExportFromRegistry(ctx context.Context, newRef, sinceR
 	fullSinceRef := ""
 
 	if sinceRef != "" {
-		// Incremental export
-		fullSinceRef = normalizeSinceRef(newRef, sinceRef)
+		// Incremental export - resolve tag with fuzzy matching
+		if !strings.Contains(sinceRef, "/") && !strings.Contains(sinceRef, ":") {
+			// Short tag format - resolve with exact-first-then-fuzzy logic
+			repo, _ := parseReference(newRef)
+			fetcher := remotedownload.NewFetcher()
+
+			exactTag, matches, err := fetcher.ResolveTag(ctx, repo, sinceRef)
+			if err != nil {
+				return "", err
+			}
+
+			if exactTag != "" {
+				// Exact or single fuzzy match
+				if exactTag != sinceRef {
+					fmt.Printf("Resolved --since %q to tag: %s\n", sinceRef, exactTag)
+				}
+				fullSinceRef = fmt.Sprintf("%s:%s", repo, exactTag)
+			} else {
+				// Multiple matches - prompt user
+				selected, err := prompt.PromptSelection(
+					fmt.Sprintf("Multiple tags found matching %q:", sinceRef),
+					matches,
+				)
+				if err != nil {
+					return "", err
+				}
+				fmt.Printf("Selected: %s\n", selected)
+				fullSinceRef = fmt.Sprintf("%s:%s", repo, selected)
+			}
+		} else {
+			fullSinceRef = normalizeSinceRef(newRef, sinceRef)
+		}
 		fmt.Printf("Calculating diff with: %s\n", fullSinceRef)
 
 		baseImage, err := re.fetchImage(ctx, fullSinceRef, platform)

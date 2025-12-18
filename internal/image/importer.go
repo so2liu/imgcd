@@ -49,6 +49,7 @@ func (i *Importer) Import(ctx context.Context, archivePath string) (string, erro
 }
 
 // extractImageName reads the metadata to get the image name
+// Supports both v1.0 (imgcd-meta.json) and v2 (metadata.json) formats
 func (i *Importer) extractImageName(archivePath string) (string, error) {
 	f, err := os.Open(archivePath)
 	if err != nil {
@@ -73,6 +74,7 @@ func (i *Importer) extractImageName(archivePath string) (string, error) {
 			return "", err
 		}
 
+		// v2 format (remote mode)
 		if header.Name == "metadata.json" {
 			var meta bundle.Metadata
 			if err := json.NewDecoder(tr).Decode(&meta); err != nil {
@@ -80,9 +82,20 @@ func (i *Importer) extractImageName(archivePath string) (string, error) {
 			}
 			return meta.ImageRef, nil
 		}
+
+		// v1.0 format (local mode)
+		if header.Name == "imgcd-meta.json" {
+			var v1Meta struct {
+				NewRef string `json:"new_ref"`
+			}
+			if err := json.NewDecoder(tr).Decode(&v1Meta); err != nil {
+				return "", err
+			}
+			return v1Meta.NewRef, nil
+		}
 	}
 
-	return "", fmt.Errorf("metadata.json not found in bundle")
+	return "", fmt.Errorf("metadata not found in bundle (expected metadata.json or imgcd-meta.json)")
 }
 
 // Close closes the importer

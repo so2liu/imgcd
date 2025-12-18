@@ -18,9 +18,18 @@ import (
 	"github.com/so2liu/imgcd/internal/runtime"
 )
 
-// BundleLoader handles loading v2 bundles and reconstructing Docker images
+// BundleLoader handles loading bundles and reconstructing Docker images
 type BundleLoader struct {
 	runtime runtime.Runtime
+}
+
+// v1Metadata represents the metadata format from local mode (v1.0)
+type v1Metadata struct {
+	Version     string `json:"version"`
+	NewRef      string `json:"new_ref"`
+	SinceRef    string `json:"since_ref"`
+	Incremental bool   `json:"incremental"`
+	LayerCount  int    `json:"layer_count"`
 }
 
 // NewBundleLoader creates a new bundle loader
@@ -30,7 +39,8 @@ func NewBundleLoader(rt runtime.Runtime) *BundleLoader {
 	}
 }
 
-// LoadBundle loads a v2 bundle and imports it into the container runtime
+// LoadBundle loads a bundle and imports it into the container runtime
+// Supports both v1.0 (imgcd-meta.json + image.tar) and v2 (metadata.json + blobs) formats
 func (bl *BundleLoader) LoadBundle(ctx context.Context, bundlePath string) error {
 	fmt.Printf("Loading bundle: %s\n", bundlePath)
 
@@ -51,8 +61,11 @@ func (bl *BundleLoader) LoadBundle(ctx context.Context, bundlePath string) error
 
 	// Read metadata first
 	var metadata bundle.Metadata
+	var v1Meta v1Metadata
 	var blobsFound map[string]bool = make(map[string]bool)
 	var tempDir string
+	var isV1Format bool
+	var imageTarPath string
 
 	// Create temp directory for blobs
 	tempDir, err = os.MkdirTemp("", "imgcd-load-*")
@@ -72,8 +85,27 @@ func (bl *BundleLoader) LoadBundle(ctx context.Context, bundlePath string) error
 		}
 
 		switch {
+		case header.Name == "imgcd-meta.json":
+			// v1.0 format (local mode)
+			if err := json.NewDecoder(tr).Decode(&v1Meta); err != nil {
+				return fmt.Errorf("failed to decode v1 metadata: %w", err)
+			}
+			isV1Format = true
+			fmt.Printf("Bundle version: %s (legacy format)\n", v1Meta.Version)
+			fmt.Printf("Image: %s\n", v1Meta.NewRef)
+			if v1Meta.SinceRef != "" {
+				fmt.Printf("Base: %s\n", v1Meta.SinceRef)
+			}
+
+		case header.Name == "image.tar" && isV1Format:
+			// v1.0 format: extract the nested image.tar
+			imageTarPath = filepath.Join(tempDir, "image.tar")
+			if err := bl.extractFile(tr, imageTarPath); err != nil {
+				return fmt.Errorf("failed to extract image.tar: %w", err)
+			}
+
 		case header.Name == "metadata.json":
-			// Read metadata
+			// v2 format (remote mode)
 			if err := json.NewDecoder(tr).Decode(&metadata); err != nil {
 				return fmt.Errorf("failed to decode metadata: %w", err)
 			}
@@ -104,6 +136,11 @@ func (bl *BundleLoader) LoadBundle(ctx context.Context, bundlePath string) error
 		}
 	}
 
+	// Handle v1.0 format (legacy local mode)
+	if isV1Format {
+		return bl.loadV1Bundle(ctx, imageTarPath, v1Meta)
+	}
+
 	// Validate we have all required blobs
 	fmt.Printf("\nValidating blobs...\n")
 	for _, layerInfo := range metadata.Layers {
@@ -128,7 +165,7 @@ func (bl *BundleLoader) LoadBundle(ctx context.Context, bundlePath string) error
 
 	// Reconstruct Docker image.tar
 	fmt.Printf("Reconstructing Docker image.tar...\n")
-	imageTarPath := filepath.Join(tempDir, "image.tar")
+	imageTarPath = filepath.Join(tempDir, "image.tar")
 	if err := bl.rebuildImageTar(imageTarPath, tempDir, &metadata, baseImageDir); err != nil {
 		return fmt.Errorf("failed to rebuild image.tar: %w", err)
 	}
@@ -509,6 +546,247 @@ func (bl *BundleLoader) copyLayerToTar(tw *tar.Writer, sourcePath, tarPath strin
 	}
 
 	if _, err := io.Copy(tw, layerFile); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// loadV1Bundle handles the legacy v1.0 format (local mode)
+// For non-incremental: image.tar can be loaded directly
+// For incremental: need to merge base image layers with new layers
+func (bl *BundleLoader) loadV1Bundle(ctx context.Context, imageTarPath string, meta v1Metadata) error {
+	if imageTarPath == "" {
+		return fmt.Errorf("image.tar not found in v1 bundle")
+	}
+
+	// Non-incremental: load directly
+	if !meta.Incremental || meta.SinceRef == "" {
+		fmt.Printf("\nLoading v1.0 format bundle (Docker-format image.tar)...\n")
+
+		imageTarFile, err := os.Open(imageTarPath)
+		if err != nil {
+			return fmt.Errorf("failed to open image.tar: %w", err)
+		}
+		defer imageTarFile.Close()
+
+		if err := bl.runtime.LoadImageFromReader(ctx, imageTarFile); err != nil {
+			return fmt.Errorf("failed to load image: %w", err)
+		}
+
+		fmt.Printf("Successfully loaded image: %s\n", meta.NewRef)
+		return nil
+	}
+
+	// Incremental: need to merge base image layers with new layers
+	fmt.Printf("\nLoading v1.0 incremental format bundle...\n")
+	fmt.Printf("This requires merging layers from base image: %s\n", meta.SinceRef)
+
+	// Export base image to temp directory
+	fmt.Printf("Exporting base image from local runtime...\n")
+	fmt.Printf("(This may take a while for large images...)\n")
+	baseImageDir, err := bl.extractBaseImage(ctx, meta.SinceRef)
+	if err != nil {
+		return fmt.Errorf("incremental import requires base image %s: %w", meta.SinceRef, err)
+	}
+	defer os.RemoveAll(baseImageDir)
+	fmt.Printf("Base image exported successfully\n")
+
+	// Extract new image.tar to temp directory
+	newImageDir, err := os.MkdirTemp("", "imgcd-new-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer os.RemoveAll(newImageDir)
+
+	if err := bl.extractTarToDir(imageTarPath, newImageDir); err != nil {
+		return fmt.Errorf("failed to extract new image: %w", err)
+	}
+
+	// Merge and rebuild
+	fmt.Printf("Merging base and new layers...\n")
+	mergedTarPath := filepath.Join(newImageDir, "merged.tar")
+	if err := bl.mergeV1Layers(mergedTarPath, baseImageDir, newImageDir, meta.NewRef); err != nil {
+		return fmt.Errorf("failed to merge layers: %w", err)
+	}
+
+	// Load merged image
+	fmt.Printf("Loading merged image into container runtime...\n")
+	mergedFile, err := os.Open(mergedTarPath)
+	if err != nil {
+		return fmt.Errorf("failed to open merged image: %w", err)
+	}
+	defer mergedFile.Close()
+
+	if err := bl.runtime.LoadImageFromReader(ctx, mergedFile); err != nil {
+		return fmt.Errorf("failed to load image: %w", err)
+	}
+
+	fmt.Printf("Successfully loaded image: %s\n", meta.NewRef)
+	return nil
+}
+
+// extractTarToDir extracts a tar file to a directory
+func (bl *BundleLoader) extractTarToDir(tarPath, destDir string) error {
+	tarFile, err := os.Open(tarPath)
+	if err != nil {
+		return err
+	}
+	defer tarFile.Close()
+
+	tr := tar.NewReader(tarFile)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		targetPath := filepath.Join(destDir, header.Name)
+		if header.Typeflag == tar.TypeDir {
+			if err := os.MkdirAll(targetPath, 0755); err != nil {
+				return err
+			}
+		} else {
+			// Create parent directory
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+				return err
+			}
+			if err := bl.extractFile(tr, targetPath); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// mergeV1Layers merges base image layers with new image layers for v1.0 incremental format
+func (bl *BundleLoader) mergeV1Layers(outputPath, baseDir, newDir, imageRef string) error {
+	// Parse base image manifest and config
+	_, baseLayers, err := bl.parseBaseImage(baseDir)
+	if err != nil {
+		return fmt.Errorf("failed to parse base image: %w", err)
+	}
+
+	// Parse new image manifest and config
+	newConfig, newLayers, err := bl.parseBaseImage(newDir)
+	if err != nil {
+		return fmt.Errorf("failed to parse new image: %w", err)
+	}
+
+	// The new image config has all DiffIDs, but the tar only has the new layers
+	// We need to figure out how many layers to copy from base
+	sharedLayerCount := len(newConfig.RootFS.DiffIDs) - len(newLayers)
+	if sharedLayerCount < 0 {
+		sharedLayerCount = 0
+	}
+
+	fmt.Printf("Merging %d base layers + %d new layers = %d total layers\n",
+		sharedLayerCount, len(newLayers), len(newConfig.RootFS.DiffIDs))
+
+	// Create output tar
+	outFile, err := os.Create(outputPath)
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+
+	tw := tar.NewWriter(outFile)
+	defer tw.Close()
+
+	var allLayerPaths []string
+
+	// Copy shared layers from base image
+	for i := 0; i < sharedLayerCount && i < len(baseLayers); i++ {
+		layerPath := baseLayers[i]
+		sourcePath := filepath.Join(baseDir, layerPath)
+		if err := bl.copyLayerToTar(tw, sourcePath, layerPath); err != nil {
+			return fmt.Errorf("failed to copy base layer %d: %w", i, err)
+		}
+		allLayerPaths = append(allLayerPaths, layerPath)
+	}
+
+	// Copy new layers
+	for _, layerPath := range newLayers {
+		sourcePath := filepath.Join(newDir, layerPath)
+		if err := bl.copyLayerToTar(tw, sourcePath, layerPath); err != nil {
+			return fmt.Errorf("failed to copy new layer: %w", err)
+		}
+		allLayerPaths = append(allLayerPaths, layerPath)
+	}
+
+	// Write config (use new image's config as it has all DiffIDs)
+	configBytes, err := json.Marshal(newConfig)
+	if err != nil {
+		return err
+	}
+
+	configHash := "unknown"
+	if len(newConfig.RootFS.DiffIDs) > 0 {
+		configHash = strings.TrimPrefix(newConfig.RootFS.DiffIDs[0].String(), "sha256:")[:12]
+	}
+	configName := configHash + ".json"
+
+	if err := tw.WriteHeader(&tar.Header{
+		Name: configName,
+		Mode: 0644,
+		Size: int64(len(configBytes)),
+	}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(configBytes); err != nil {
+		return err
+	}
+
+	// Write manifest
+	manifest := []dockerManifest{
+		{
+			Config:   configName,
+			RepoTags: []string{imageRef},
+			Layers:   allLayerPaths,
+		},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "manifest.json",
+		Mode: 0644,
+		Size: int64(len(manifestBytes)),
+	}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(manifestBytes); err != nil {
+		return err
+	}
+
+	// Write repositories file
+	repo, tag := parseReference(imageRef)
+	if len(allLayerPaths) == 0 {
+		return fmt.Errorf("no layers to write")
+	}
+	repositories := map[string]map[string]string{
+		repo: {
+			tag: strings.TrimPrefix(allLayerPaths[len(allLayerPaths)-1], "sha256:")[:12],
+		},
+	}
+	repoBytes, err := json.Marshal(repositories)
+	if err != nil {
+		return err
+	}
+
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "repositories",
+		Mode: 0644,
+		Size: int64(len(repoBytes)),
+	}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(repoBytes); err != nil {
 		return err
 	}
 
